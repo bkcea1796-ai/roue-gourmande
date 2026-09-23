@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>La Roue Gourmande</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="roue-gourmande.css">
+</head>
+<body>
+<div class="app">
+  <div class="brand">🎡 La Roue Gourmande</div>
+  <p class="tagline">Une chance, un tour, un gain peut‑être &mdash; à vous de jouer !</p>
+
+  <!-- LOCKED -->
+  <div id="screen-locked" class="screen hidden">
+    <div class="card">
+      <h2>🔒 Partie déjà jouée</h2>
+      <p class="result-body" id="lockedText">Vous avez déjà utilisé votre tour sur cet appareil.</p>
+      <div class="result-flag">Un seul tour est autorisé par personne. Merci de votre visite !</div>
+    </div>
+  </div>
+
+  <!-- RULES -->
+  <div id="screen-rules" class="screen">
+    <div class="card">
+      <h2>Avant de jouer</h2>
+      <label class="player-label" for="playerId">Identifiant du joueur</label>
+      <input class="player-input" id="playerId" type="text" autocomplete="off" placeholder="Ex. client-001" required>
+      <ul class="rules">
+        <li><span class="mark">🥞</span><span>Participation à partir de <b>3 crêpes achetées minimum</b>.</span></li>
+        <li><span class="mark">🎟️</span><span><b>Un seul tour par personne</b>, sans exception.</span></li>
+        <li><span class="mark">🚫</span><span>Toute tentative de rejouer <b>annule la partie</b> en cours.</span></li>
+        <li><span class="mark">🔒</span><span>Une fois la roue lancée, cet appareil est <b>verrouillé définitivement</b>.</span></li>
+      </ul>
+      <button class="btn" id="startBtn">C'est compris, je tourne la roue</button>
+    </div>
+  </div>
+
+  <!-- WHEEL -->
+  <div id="screen-wheel" class="screen hidden">
+    <div class="wheel-wrap">
+      <div class="pointer">▼</div>
+      <div class="wheel" id="wheel">
+        <div class="hub">🥞</div>
+        <div id="wheelLabels"></div>
+      </div>
+    </div>
+    <button class="btn" id="spinBtn">Lancer la roue</button>
+    <p class="spin-note">Une seule pression &mdash; le résultat est définitif.</p>
+  </div>
+
+  <!-- RESULT -->
+  <div id="screen-result" class="screen hidden">
+    <div class="card">
+      <div class="result-emoji" id="resEmoji">🎉</div>
+      <h2 class="result-title" id="resTitle"></h2>
+      <p class="result-body" id="resBody"></p>
+      <div class="result-flag" id="resFlag"></div>
+    </div>
+    <p class="lock-note">Cette page est maintenant verrouillée sur cet appareil.</p>
+  </div>
+
+  <!-- ADMIN, hidden until Ctrl+Shift+A -->
+  <div id="screen-admin" class="screen hidden">
+    <div class="card admin-card">
+      <h2>Administration</h2>
+      <div id="adminLogin">
+        <label class="player-label" for="adminId">Identifiant administrateur</label>
+        <input class="player-input" id="adminId" type="password" autocomplete="off" placeholder="Identifiant admin">
+        <button class="btn" id="adminLoginBtn" type="button">Ouvrir l'administration</button>
+        <p class="reset-message" id="adminMessage" aria-live="polite"></p>
+      </div>
+      <div id="adminContent" class="hidden">
+        <p class="admin-summary" id="adminSummary"></p>
+        <div class="admin-users" id="adminUsers"></div>
+        <button class="btn btn-secondary" id="adminLogoutBtn" type="button">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var STORAGE_KEY = "roue_gourmande_v1";
+  var USERS_KEY = "roue_gourmande_users_v1";
+  var ADMIN_ID = "RG-ADMIN-2026";
+  var activeUserId = "";
+  var adminAuthenticated = false;
+
+  var slices = [
+    { type:"lose",    label:"Pas de chance", weight:9,  color:"#8a6a52" },
+    { type:"win",     label:"5 lancers francs", weight:12, color:"#1f9d8a",
+      reward:"Réussissez 5 lancers francs consécutifs pour obtenir 200 FCFA de réduction." },
+    { type:"lose",    label:"Pas de chance", weight:9,  color:"#8a6a52" },
+    { type:"win",     label:"Pierre-feuille-ciseaux", weight:12, color:"#c9456b",
+      reward:"Affrontez le gérant en 3 manches : victoire = 100 FCFA de réduction." },
+    { type:"win",     label:"Jeu des ballons", weight:12, color:"#6b4a8a",
+      reward:"Présentez-vous au stand pour tenter le jeu des ballons et remporter un encas." },
+    { type:"win",     label:"Pile ou face", weight:12, color:"#1f9d8a",
+      reward:"Devinez juste : 100 FCFA de réduction à la clé." },
+    { type:"lose",    label:"Pas de chance", weight:9,  color:"#8a6a52" },
+    { type:"jackpot", label:"Crêpe gratuite", weight:7,  color:"#e8b74d",
+      reward:"Une crêpe offerte, sans condition, par le stand." }
+  ];
+
+  var n = slices.length;
+  var segAngle = 360 / n;
+
+  // build conic-gradient background
+  var stops = [];
+  for (var i = 0; i < n; i++){
+    stops.push(slices[i].color + " " + (i*segAngle) + "deg " + ((i+1)*segAngle) + "deg");
+  }
+  document.getElementById("wheel").style.background = "conic-gradient(" + stops.join(",") + ")";
+
+  // build labels
+  var labelsHost = document.getElementById("wheelLabels");
+  for (var j = 0; j < n; j++){
+    var el = document.createElement("div");
+    el.className = "seg-label";
+    el.style.transform = "rotate(" + (j*segAngle + segAngle/2 - 90) + "deg)";
+    el.textContent = slices[j].label;
+    labelsHost.appendChild(el);
+  }
+
+  // unbiased weighted pick via cumulative distribution
+  function weightedPick(list){
+    var total = 0;
+    for (var k = 0; k < list.length; k++) total += list[k].weight;
+    var r = Math.random() * total;
+    for (var m = 0; m < list.length; m++){
+      if (r < list[m].weight) return m;
+      r -= list[m].weight;
+    }
+    return list.length - 1; // safety net against float rounding
+  }
+
+  function show(id){
+    ["screen-locked","screen-rules","screen-wheel","screen-result","screen-admin"].forEach(function(s){
+      document.getElementById(s).classList.toggle("hidden", s !== id);
+    });
+  }
+
+  function readUsers(){
+    try{
+      return JSON.parse(localStorage.getItem(USERS_KEY) || "{}");
+    } catch(e){
+      return {};
+    }
+  }
+
+  function showLocked(userId, data){
+    document.getElementById("lockedText").textContent =
+      "Résultat obtenu pour " + userId + " : " + data.label + ".";
+    show("screen-locked");
+  }
+
+  function renderResult(slice){
+    var emoji = document.getElementById("resEmoji");
+    var title = document.getElementById("resTitle");
+    var body  = document.getElementById("resBody");
+    var flag  = document.getElementById("resFlag");
+
+    if (slice.type === "lose"){
+      emoji.textContent = "😔";
+      title.textContent = "Pas de chance cette fois-ci";
+      body.textContent = "Merci d'avoir tenté votre chance ! Vous repartez sans lot, mais avec de bonnes crêpes en poche.";
+      flag.textContent = "Un seul tour est autorisé par personne.";
+    } else if (slice.type === "jackpot"){
+      emoji.textContent = "🎉";
+      title.textContent = "Jackpot : " + slice.label + " !";
+      body.textContent = slice.reward;
+      flag.textContent = "Présentez cet écran au gérant du stand pour récupérer votre gain.";
+    } else {
+      emoji.textContent = "🏆";
+      title.textContent = "Gagné : " + slice.label;
+      body.textContent = slice.reward;
+      flag.textContent = "Présentez cet écran au gérant du stand pour jouer votre mini-jeu.";
+    }
+  }
+
+  function lockAndSave(slice){
+    try{
+      var users = readUsers();
+      users[activeUserId] = {
+        userId: activeUserId,
+        label: slice.type === "lose" ? "Pas de chance" : slice.label,
+        type: slice.type,
+        date: new Date().toISOString()
+      };
+      localStorage.setItem(USERS_KEY, JSON.stringify(users));
+      localStorage.removeItem(STORAGE_KEY);
+    } catch(e){ /* storage unavailable — result still shown for this session */ }
+  }
+
+  function spin(){
+    var btn = document.getElementById("spinBtn");
+    btn.disabled = true;
+
+    var idx = weightedPick(slices);
+    var center = idx * segAngle + segAngle / 2;
+    var margin = Math.max(2, segAngle * 0.2);
+    var jitter = (Math.random() * (segAngle - margin*2)) - (segAngle - margin*2) / 2;
+    var extraSpins = 6;
+    var rotation = extraSpins * 360 + ((360 - center) % 360) + jitter;
+
+    var wheel = document.getElementById("wheel");
+    wheel.style.transform = "rotate(" + rotation + "deg)";
+
+    setTimeout(function(){
+      var slice = slices[idx];
+      lockAndSave(slice);
+      renderResult(slice);
+      show("screen-result");
+    }, 4300);
+  }
+
+  document.getElementById("startBtn").addEventListener("click", function(){
+    var playerId = document.getElementById("playerId").value.trim();
+    if (!playerId){
+      document.getElementById("playerId").focus();
+      return;
+    }
+    activeUserId = playerId;
+    var users = readUsers();
+    if (users[playerId]){
+      showLocked(playerId, users[playerId]);
+      return;
+    }
+    show("screen-wheel");
+  });
+  document.getElementById("spinBtn").addEventListener("click", spin);
+
+  function renderAdminUsers(){
+    var users = readUsers();
+    var ids = Object.keys(users).sort();
+    var host = document.getElementById("adminUsers");
+    document.getElementById("adminSummary").textContent = ids.length + " joueur(s) enregistré(s).";
+    host.textContent = "";
+
+    if (!ids.length){
+      host.textContent = "Aucun joueur enregistré.";
+      return;
+    }
+
+    ids.forEach(function(userId){
+      var row = document.createElement("div");
+      row.className = "admin-user";
+      var info = document.createElement("span");
+      info.textContent = userId + " — " + users[userId].label;
+      var reset = document.createElement("button");
+      reset.className = "btn btn-secondary";
+      reset.type = "button";
+      reset.textContent = "Donner une chance";
+      reset.addEventListener("click", function(){
+        var currentUsers = readUsers();
+        delete currentUsers[userId];
+        localStorage.setItem(USERS_KEY, JSON.stringify(currentUsers));
+        renderAdminUsers();
+      });
+      row.appendChild(info);
+      row.appendChild(reset);
+      host.appendChild(row);
+    });
+  }
+
+  document.getElementById("adminLoginBtn").addEventListener("click", function(){
+    var message = document.getElementById("adminMessage");
+    if (document.getElementById("adminId").value !== ADMIN_ID){
+      message.textContent = "Identifiant administrateur incorrect.";
+      return;
+    }
+    adminAuthenticated = true;
+    document.getElementById("adminLogin").classList.add("hidden");
+    document.getElementById("adminContent").classList.remove("hidden");
+    renderAdminUsers();
+  });
+  document.getElementById("adminLogoutBtn").addEventListener("click", function(){
+    adminAuthenticated = false;
+    document.getElementById("adminId").value = "";
+    document.getElementById("adminContent").classList.add("hidden");
+    document.getElementById("adminLogin").classList.remove("hidden");
+    show("screen-rules");
+  });
+  document.addEventListener("keydown", function(event){
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "a"){
+      event.preventDefault();
+      show("screen-admin");
+      document.getElementById("adminId").focus();
+    }
+  });
+
+  // on load: check if this device already played
+  (function init(){
+    try{
+      var saved = localStorage.getItem(STORAGE_KEY);
+      if (saved){
+        var data = JSON.parse(saved);
+        var users = readUsers();
+        var legacyUserId = data.userId || "utilisateur";
+        users[legacyUserId] = data;
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch(e){ /* if storage fails, fall through to rules screen */ }
+    show("screen-rules");
+  })();
+})();
+</script>
+</body>
+</html>
